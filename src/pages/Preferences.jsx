@@ -317,7 +317,7 @@ export default function PreferencesPage({
   // 🔹 Load profile data when memberRecord is available
   useEffect(() => {
     if (memberRecord) {
-      setFirstName(memberRecord.first_name || "");
+      setFirstName(memberRecord.first_name || "EEK");
       setLastName(memberRecord.last_name || "");
       setJobTitle(memberRecord.job_title || "");
       setBiography(memberRecord.biography || "");
