@@ -697,7 +697,7 @@ const { data: dynamicNavItems = [] } = useQuery({
       try {
         // 1️⃣ Find member by email
         const { data: member, error: lookupError } = await supabase
-          .from('Member')   // or 'members' depending on your schema
+          .from('member')   // or 'members' depending on your schema
           .select('id')
           .eq('email', memberInfo.email)
           .maybeSingle();
@@ -714,7 +714,7 @@ const { data: dynamicNavItems = [] } = useQuery({
     
         // 2️⃣ Update last_activity timestamp
         const { error: updateError } = await supabase
-          .from('Member')
+          .from('member')
           .update({
             last_activity: new Date().toISOString()
           })
