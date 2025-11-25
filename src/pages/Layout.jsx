@@ -2,7 +2,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
 import { Calendar, User, CreditCard, LogOut, Ticket, Wallet, Shield, Users, Settings, Sparkles, ShoppingCart, History, BarChart3, Briefcase, FileEdit, Image, FileText, AtSign, FolderTree, Square, Trophy, BookOpen, Mail, MousePointer2, Building, Download, HelpCircle, Menu, ChevronRight } from "lucide-react";
 import {
   Sidebar,
@@ -560,32 +559,67 @@ const { data: dynamicNavItems = [] } = useQuery({
   };
 
   const fetchOrganizationInfo = async (orgId) => {
-    // Skip if already loaded
+    // No orgId → nothing to do
+    if (!orgId) return;
+  
+    // Skip if already loaded into state
     if (organizationInfo) return;
-
+  
     // Try to load from sessionStorage first
     const cachedOrg = sessionStorage.getItem('agcas_organization');
     if (cachedOrg) {
-      setOrganizationInfo(JSON.parse(cachedOrg));
-      return;
-    }
-
-    try {
-      const allOrgs = await base44.entities.Organization.list();
-      let org = allOrgs.find(o => o.id === orgId);
-
-      if (!org) {
-        org = allOrgs.find(o => o.zoho_account_id === orgId);
+      try {
+        const parsed = JSON.parse(cachedOrg);
+        setOrganizationInfo(parsed);
+        return;
+      } catch (e) {
+        console.warn('Failed to parse cached organization, ignoring cache:', e);
+        // fall through to fresh load
       }
-
+    }
+  
+    try {
+      // 1️⃣ Try lookup by primary id
+      let org = null;
+  
+      const { data: orgById, error: errorById } = await supabase
+        .from('Organization')              // or 'organizations' if that’s your table name
+        .select('*')
+        .eq('id', orgId)
+        .maybeSingle();
+  
+      if (errorById) {
+        console.error('Error fetching organization by id:', errorById);
+      }
+  
+      if (orgById) {
+        org = orgById;
+      } else {
+        // 2️⃣ Fallback: try lookup by zoho_account_id
+        const { data: orgByZoho, error: errorByZoho } = await supabase
+          .from('Organization')            // same table
+          .select('*')
+          .eq('zoho_account_id', orgId)
+          .maybeSingle();
+  
+        if (errorByZoho) {
+          console.error('Error fetching organization by zoho_account_id:', errorByZoho);
+        }
+  
+        if (orgByZoho) {
+          org = orgByZoho;
+        }
+      }
+  
       if (org) {
         sessionStorage.setItem('agcas_organization', JSON.stringify(org));
         setOrganizationInfo(org);
       }
     } catch (error) {
-      console.error('Error fetching organization:', error);
+      console.error('Unexpected error fetching organization:', error);
     }
   };
+  
 
 
 
@@ -649,29 +683,53 @@ const { data: dynamicNavItems = [] } = useQuery({
   useEffect(() => {
     const updateLastActivity = async () => {
       if (!memberInfo?.email || isPublicPage()) return;
-      
+    
       const now = Date.now();
       const tenMinutes = 10 * 60 * 1000;
-      
-      // Check if we've updated recently
+    
+      // Throttle: only update once every 10 minutes
       if (lastActivityUpdateRef.current && (now - lastActivityUpdateRef.current) < tenMinutes) {
         return;
       }
-      
+    
       try {
-        // Find member record and update last_activity
-        const allMembers = await base44.entities.Member.list();
-        const member = allMembers.find(m => m.email === memberInfo.email);
-        if (member) {
-          await base44.entities.Member.update(member.id, {
-            last_activity: new Date().toISOString()
-          });
-          lastActivityUpdateRef.current = now;
+        // 1️⃣ Find member by email
+        const { data: member, error: lookupError } = await supabase
+          .from('Member')   // or 'members' depending on your schema
+          .select('id')
+          .eq('email', memberInfo.email)
+          .maybeSingle();
+    
+        if (lookupError) {
+          console.error('Supabase lookup error (Member):', lookupError);
+          return;
         }
+    
+        if (!member) {
+          console.warn('Member not found for email:', memberInfo.email);
+          return;
+        }
+    
+        // 2️⃣ Update last_activity timestamp
+        const { error: updateError } = await supabase
+          .from('Member')
+          .update({
+            last_activity: new Date().toISOString()
+          })
+          .eq('id', member.id);
+    
+        if (updateError) {
+          console.error('Supabase update error (Member.last_activity):', updateError);
+          return;
+        }
+    
+        // 3️⃣ Update throttling ref
+        lastActivityUpdateRef.current = now;
       } catch (error) {
-        console.error('Error updating last_activity:', error);
+        console.error('Unexpected error updating last_activity:', error);
       }
     };
+    
     
     updateLastActivity();
   }, [location.pathname, memberInfo?.email]);
