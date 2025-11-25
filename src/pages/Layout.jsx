@@ -29,6 +29,8 @@ import FloaterDisplay from "@/components/floaters/FloaterDisplay";
 import NewsTickerBar from "@/components/news/NewsTickerBar";
 
 import { useQuery } from '@tanstack/react-query';
+import { supabase } from "@/api/supabaseClient";
+
 
 
 
