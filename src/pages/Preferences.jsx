@@ -32,6 +32,10 @@ import ResourceFilter from "../components/resources/ResourceFilter";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 
+console.log("[Preferences] PROPS:", { memberInfo, organizationInfo, reloadMemberInfo, isFeatureExcluded });
+
+
+
 // Helper: upload an image to Supabase storage and return a public URL
 async function uploadImageToSupabase(file, bucket, folderPrefix = "") {
   const fileExt = file.name.split(".").pop();
