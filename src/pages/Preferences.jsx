@@ -1,19 +1,64 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/api/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription
+} from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, X, Search, ChevronRight, ChevronDown, Save, Upload, User, Calendar, FileText, Briefcase, Trophy, Building2, Users, CalendarDays } from "lucide-react";
+import {
+  Loader2,
+  X,
+  Upload,
+  User,
+  Calendar,
+  FileText,
+  Briefcase,
+  Trophy,
+  Building2,
+  Users,
+  CalendarDays,
+  Save
+} from "lucide-react";
 import { format } from "date-fns";
 import ResourceFilter from "../components/resources/ResourceFilter";
 import { toast } from "sonner";
-import { Switch } from "@/components/ui/switch"; // Import Switch component
+import { Switch } from "@/components/ui/switch";
 
-export default function PreferencesPage({ memberInfo, organizationInfo, reloadMemberInfo, isFeatureExcluded }) {
+// Helper: upload an image to Supabase storage and return a public URL
+async function uploadImageToSupabase(file, bucket, folderPrefix = "") {
+  const fileExt = file.name.split(".").pop();
+  const fileName = `${folderPrefix ? `${folderPrefix}/` : ""}${Date.now()}-${Math
+    .random()
+    .toString(36)
+    .slice(2)}.${fileExt}`;
+
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .upload(fileName, file);
+
+  if (error) throw error;
+
+  const { data: publicData } = supabase.storage
+    .from(bucket)
+    .getPublicUrl(fileName);
+
+  return publicData.publicUrl;
+}
+
+export default function PreferencesPage({
+  memberInfo,
+  organizationInfo,
+  reloadMemberInfo,
+  isFeatureExcluded
+}) {
   const [selectedSubcategories, setSelectedSubcategories] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -30,7 +75,6 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [hasUnsavedProfile, setHasUnsavedProfile] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
-  // Add new state for directory visibility
   const [showInDirectory, setShowInDirectory] = useState(true);
 
   // Organization logo state
@@ -40,159 +84,235 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
 
   const queryClient = useQueryClient();
 
-  // Fetch current user data
+  // 🔹 Current auth user (with preferences stored in user_metadata.preferences)
   const { data: currentUser, isLoading: userLoading } = useQuery({
-    queryKey: ['currentUser'],
+    queryKey: ["currentUser"],
     queryFn: async () => {
-      return await base44.auth.me();
+      const { data, error } = await supabase.auth.getUser();
+      if (error) throw error;
+      return data.user;
     },
-    staleTime: 30 * 1000,
+    staleTime: 30 * 1000
   });
 
-  // Fetch member record for profile data
+  // 🔹 Member record (linked to email)
   const { data: memberRecord, isLoading: memberLoading } = useQuery({
-    queryKey: ['memberRecord', memberInfo?.email],
+    queryKey: ["memberRecord", memberInfo?.email],
     queryFn: async () => {
-      const allMembers = await base44.entities.Member.list();
-      return allMembers.find(m => m.email === memberInfo?.email);
+      if (!memberInfo?.email) return null;
+      const { data, error } = await supabase
+        .from("members")
+        .select("*")
+        .eq("email", memberInfo.email)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     },
     enabled: !!memberInfo?.email,
-    staleTime: 30 * 1000,
+    staleTime: 30 * 1000
   });
 
-  // Fetch engagement statistics
+  // 🔹 Engagement statistics (events attended, articles written, jobs posted)
   const { data: engagementStats, isLoading: statsLoading } = useQuery({
-    queryKey: ['engagementStats', memberRecord?.id],
+    queryKey: ["engagementStats", memberRecord?.id],
     queryFn: async () => {
-      if (!memberRecord?.id) return { eventsAttended: 0, articlesWritten: 0, jobsPosted: 0 };
+      if (!memberRecord?.id) {
+        return { eventsAttended: 0, articlesWritten: 0, jobsPosted: 0 };
+      }
 
-      const [bookings, articles, jobPostings] = await Promise.all([
-        base44.entities.Booking.list(),
-        base44.entities.BlogPost.list(),
-        base44.entities.JobPosting.list()
+      const memberId = memberRecord.id;
+
+      const [
+        { data: bookings = [], error: bookingsError },
+        { data: articles = [], error: articlesError },
+        { data: jobPostings = [], error: jobsError }
+      ] = await Promise.all([
+        supabase
+          .from("bookings")
+          .select("id, member_id, status")
+          .eq("member_id", memberId)
+          .eq("status", "confirmed"),
+        supabase
+          .from("blog_posts")
+          .select("id, author_id, status")
+          .eq("author_id", memberId)
+          .eq("status", "published"),
+        supabase
+          .from("job_postings")
+          .select("id, posted_by_member_id")
+          .eq("posted_by_member_id", memberId)
       ]);
 
-      const eventsAttended = bookings.filter(b => b.member_id === memberRecord.id && b.status === 'confirmed').length;
-      const articlesWritten = articles.filter(a => a.author_id === memberRecord.id && a.status === 'published').length;
-      const jobsPosted = jobPostings.filter(j => j.posted_by_member_id === memberRecord.id).length;
+      if (bookingsError) throw bookingsError;
+      if (articlesError) throw articlesError;
+      if (jobsError) throw jobsError;
+
+      const eventsAttended = bookings.length;
+      const articlesWritten = articles.length;
+      const jobsPosted = jobPostings.length;
 
       return { eventsAttended, articlesWritten, jobsPosted };
     },
     enabled: !!memberRecord?.id,
-    staleTime: 60 * 1000,
+    staleTime: 60 * 1000
   });
 
-  // Fetch online awards
+  // 🔹 Online awards
   const { data: awards = [], isLoading: awardsLoading } = useQuery({
-    queryKey: ['awards'],
+    queryKey: ["awards"],
     queryFn: async () => {
-      const allAwards = await base44.entities.Award.list();
-      return allAwards.filter(a => a.is_active).sort((a, b) => (a.level || 0) - (b.level || 0));
+      const { data, error } = await supabase
+        .from("awards")
+        .select("*")
+        .eq("is_active", true)
+        .order("level", { ascending: true });
+      if (error) throw error;
+      return data || [];
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   });
 
-  // Fetch offline award assignments for current member
-  const { data: offlineAssignments = [], isLoading: offlineAssignmentsLoading } = useQuery({
-    queryKey: ['myOfflineAwardAssignments', memberRecord?.id],
-    queryFn: async () => {
-      if (!memberRecord?.id) return [];
-      const allAssignments = await base44.entities.OfflineAwardAssignment.list();
-      return allAssignments.filter(a => a.member_id === memberRecord.id);
-    },
-    enabled: !!memberRecord?.id,
-    staleTime: 60 * 1000,
-  });
+  // 🔹 Offline award assignments (for current member)
+  const { data: offlineAssignments = [], isLoading: offlineAssignmentsLoading } =
+    useQuery({
+      queryKey: ["myOfflineAwardAssignments", memberRecord?.id],
+      queryFn: async () => {
+        if (!memberRecord?.id) return [];
+        const { data, error } = await supabase
+          .from("offline_award_assignments")
+          .select("*")
+          .eq("member_id", memberRecord.id);
+        if (error) throw error;
+        return data || [];
+      },
+      enabled: !!memberRecord?.id,
+      staleTime: 60 * 1000
+    });
 
-  // Fetch award sublevels
+  // 🔹 Award sublevels
   const { data: awardSublevels = [] } = useQuery({
-    queryKey: ['awardSublevels'],
+    queryKey: ["awardSublevels"],
     queryFn: async () => {
-      return await base44.entities.AwardSublevel.list();
+      const { data, error } = await supabase
+        .from("award_sublevels")
+        .select("*");
+      if (error) throw error;
+      return data || [];
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   });
 
-  // Fetch member group assignments
-  const { data: groupAssignments = [], isLoading: groupAssignmentsLoading } = useQuery({
-    queryKey: ['myGroupAssignments', memberRecord?.id],
-    queryFn: async () => {
-      if (!memberRecord?.id) return [];
-      const allAssignments = await base44.entities.MemberGroupAssignment.list();
-      return allAssignments.filter(a => a.member_id === memberRecord.id);
-    },
-    enabled: !!memberRecord?.id,
-    staleTime: 60 * 1000,
-  });
+  // 🔹 Member group assignments
+  const { data: groupAssignments = [], isLoading: groupAssignmentsLoading } =
+    useQuery({
+      queryKey: ["myGroupAssignments", memberRecord?.id],
+      queryFn: async () => {
+        if (!memberRecord?.id) return [];
+        const { data, error } = await supabase
+          .from("member_group_assignments")
+          .select("*")
+          .eq("member_id", memberRecord.id);
+        if (error) throw error;
+        return data || [];
+      },
+      enabled: !!memberRecord?.id,
+      staleTime: 60 * 1000
+    });
 
-  // Fetch member groups
+  // 🔹 Member groups
   const { data: memberGroups = [], isLoading: groupsLoading } = useQuery({
-    queryKey: ['memberGroups'],
+    queryKey: ["memberGroups"],
     queryFn: async () => {
-      const allGroups = await base44.entities.MemberGroup.list();
-      return allGroups.filter(g => g.is_active);
+      const { data, error } = await supabase
+        .from("member_groups")
+        .select("*")
+        .eq("is_active", true);
+      if (error) throw error;
+      return data || [];
     },
     enabled: groupAssignments.length > 0,
-    staleTime: 60 * 1000,
+    staleTime: 60 * 1000
   });
 
-  // Fetch offline awards
+  // 🔹 Offline awards
   const { data: offlineAwards = [], isLoading: offlineAwardsLoading } = useQuery({
-    queryKey: ['offlineAwards'],
+    queryKey: ["offlineAwards"],
     queryFn: async () => {
-      const allAwards = await base44.entities.OfflineAward.list();
-      return allAwards.filter(a => a.is_active);
+      const { data, error } = await supabase
+        .from("offline_awards")
+        .select("*")
+        .eq("is_active", true);
+      if (error) throw error;
+      return data || [];
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   });
 
-  // Fetch award classifications
+  // 🔹 Award classifications
   const { data: awardClassifications = [] } = useQuery({
-    queryKey: ['awardClassifications'],
+    queryKey: ["awardClassifications"],
     queryFn: async () => {
-      return await base44.entities.AwardClassification.list();
+      const { data, error } = await supabase
+        .from("award_classifications")
+        .select("*");
+      if (error) throw error;
+      return data || [];
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000
   });
 
+  // 🔹 Resource categories
   const { data: categories = [], isLoading: categoriesLoading } = useQuery({
-    queryKey: ['resourceCategories'],
+    queryKey: ["resourceCategories"],
     queryFn: async () => {
-      const cats = await base44.entities.ResourceCategory.list();
-      return cats.filter(c => c.is_active).sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
+      const { data, error } = await supabase
+        .from("resource_categories")
+        .select("*")
+        .eq("is_active", true)
+        .order("display_order", { ascending: true });
+      if (error) throw error;
+      return data || [];
     },
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false
   });
 
-  // Calculate earned online awards
+  // 🔹 Calculate earned online awards
   const earnedOnlineAwards = useMemo(() => {
     if (!engagementStats || !awards || awards.length === 0) return [];
 
-    return awards.filter(award => {
-      const stat = award.award_type === 'events_attended' ? engagementStats.eventsAttended :
-                   award.award_type === 'articles_published' ? engagementStats.articlesWritten :
-                   award.award_type === 'jobs_posted' ? engagementStats.jobsPosted : 0;
+    return awards.filter((award) => {
+      const stat =
+        award.award_type === "events_attended"
+          ? engagementStats.eventsAttended
+          : award.award_type === "articles_published"
+          ? engagementStats.articlesWritten
+          : award.award_type === "jobs_posted"
+          ? engagementStats.jobsPosted
+          : 0;
       return stat >= award.threshold;
     });
   }, [engagementStats, awards]);
 
-  // Get earned offline awards with sublevel info
+  // 🔹 Get earned offline awards with sublevel info
   const earnedOfflineAwards = useMemo(() => {
-    if (!offlineAssignments || offlineAssignments.length === 0 || !offlineAwards) return [];
-    
+    if (!offlineAssignments || offlineAssignments.length === 0 || !offlineAwards)
+      return [];
+
     return offlineAssignments
-      .map(assignment => {
-        const award = offlineAwards.find(a => a.id === assignment.offline_award_id);
+      .map((assignment) => {
+        const award = offlineAwards.find((a) => a.id === assignment.offline_award_id);
         if (!award) return null;
-        const sublevel = assignment.sublevel_id ? awardSublevels.find(s => s.id === assignment.sublevel_id) : null;
+        const sublevel = assignment.sublevel_id
+          ? awardSublevels.find((s) => s.id === assignment.sublevel_id)
+          : null;
         return { ...award, sublevel };
       })
       .filter(Boolean)
       .sort((a, b) => (a.level || 0) - (b.level || 0));
   }, [offlineAssignments, offlineAwards, awardSublevels]);
 
-  // Load profile data when memberRecord is available
+  // 🔹 Load profile data when memberRecord is available
   useEffect(() => {
     if (memberRecord) {
       setFirstName(memberRecord.first_name || "");
@@ -201,21 +321,21 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
       setBiography(memberRecord.biography || "");
       setProfilePhotoUrl(memberRecord.profile_photo_url || "");
       setLinkedinUrl(memberRecord.linkedin_url || "");
-      setShowInDirectory(memberRecord.show_in_directory !== false); // Default to true if not explicitly false
+      setShowInDirectory(memberRecord.show_in_directory !== false); // default true
     }
   }, [memberRecord]);
 
-  // Load organization logo when organizationInfo is available
+  // 🔹 Load organization logo
   useEffect(() => {
     if (organizationInfo) {
       setOrganizationLogoUrl(organizationInfo.logo_url || "");
     }
   }, [organizationInfo]);
 
-  // Load preferences when user data is available
+  // 🔹 Load preferences from auth user_metadata
   useEffect(() => {
-    if (currentUser?.preferences) {
-      const prefs = currentUser.preferences;
+    if (currentUser?.user_metadata?.preferences) {
+      const prefs = currentUser.user_metadata.preferences;
       if (prefs.selectedSubcategories) {
         setSelectedSubcategories(prefs.selectedSubcategories);
       }
@@ -225,107 +345,142 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
     }
   }, [currentUser]);
 
+  // 🔹 Save preferences (stored in Supabase auth user metadata)
   const savePreferencesMutation = useMutation({
     mutationFn: async (preferences) => {
-      return await base44.auth.updateMe({ preferences });
+      const { data, error } = await supabase.auth.updateUser({
+        data: { preferences }
+      });
+      if (error) throw error;
+      return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['currentUser'] });
-      toast.success('Preferences saved successfully');
+      queryClient.invalidateQueries({ queryKey: ["currentUser"] });
+      toast.success("Preferences saved successfully");
       setHasUnsavedChanges(false);
       setIsSaving(false);
     },
-    onError: (error) => {
-      toast.error('Failed to save preferences');
+    onError: () => {
+      toast.error("Failed to save preferences");
       setIsSaving(false);
     }
   });
 
+  // 🔹 Update profile (member record)
   const updateProfileMutation = useMutation({
     mutationFn: async (profileData) => {
-      return await base44.entities.Member.update(memberRecord.id, profileData);
+      if (!memberRecord?.id) throw new Error("No member record");
+      const { data, error } = await supabase
+        .from("members")
+        .update(profileData)
+        .eq("id", memberRecord.id)
+        .select()
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['memberRecord'] });
-      queryClient.invalidateQueries({ queryKey: ['all-members-directory'] });
-      toast.success('Profile updated successfully');
+      queryClient.invalidateQueries({ queryKey: ["memberRecord"] });
+      queryClient.invalidateQueries({ queryKey: ["all-members-directory"] });
+      toast.success("Profile updated successfully");
       setHasUnsavedProfile(false);
       setIsSavingProfile(false);
       if (reloadMemberInfo) {
         reloadMemberInfo();
       }
     },
-    onError: (error) => {
-      toast.error('Failed to update profile');
+    onError: () => {
+      toast.error("Failed to update profile");
       setIsSavingProfile(false);
     }
   });
 
+  // 🔹 Update organization logo
   const updateOrganizationLogoMutation = useMutation({
     mutationFn: async (logoUrl) => {
-      return await base44.entities.Organization.update(organizationInfo.id, {
-        logo_url: logoUrl
-      });
+      if (!organizationInfo?.id) throw new Error("No organization");
+      const { data, error } = await supabase
+        .from("organizations")
+        .update({ logo_url: logoUrl })
+        .eq("id", organizationInfo.id)
+        .select()
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] }); // Invalidate organization query if any
-      toast.success('Organization logo updated successfully');
+      queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      toast.success("Organization logo updated successfully");
       setHasUnsavedOrgLogo(false);
     },
-    onError: (error) => {
-      toast.error('Failed to update organization logo');
+    onError: () => {
+      toast.error("Failed to update organization logo");
     }
   });
 
+  // 🔹 Photo upload (profile)
   const handlePhotoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      toast.error('Please select an image file');
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      toast.error('Image must be less than 5MB');
+      toast.error("Image must be less than 5MB");
       return;
     }
 
     setIsUploadingPhoto(true);
     try {
-      const result = await base44.integrations.Core.UploadFile({ file });
-      setProfilePhotoUrl(result.file_url);
+      const folder = currentUser?.id || "member";
+      const publicUrl = await uploadImageToSupabase(
+        file,
+        "member-photos",
+        folder
+      );
+      setProfilePhotoUrl(publicUrl);
       setHasUnsavedProfile(true);
-      toast.success('Photo uploaded successfully');
+      toast.success("Photo uploaded successfully");
     } catch (error) {
-      toast.error('Failed to upload photo');
+      console.error(error);
+      toast.error("Failed to upload photo");
     } finally {
       setIsUploadingPhoto(false);
     }
   };
 
+  // 🔹 Logo upload (organization)
   const handleOrgLogoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      toast.error('Please select an image file');
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      toast.error('Image must be less than 5MB');
+      toast.error("Image must be less than 5MB");
       return;
     }
 
     setIsUploadingOrgLogo(true);
     try {
-      const result = await base44.integrations.Core.UploadFile({ file });
-      setOrganizationLogoUrl(result.file_url);
+      const folder = organizationInfo?.id || "organization";
+      const publicUrl = await uploadImageToSupabase(
+        file,
+        "organization-logos",
+        folder
+      );
+      setOrganizationLogoUrl(publicUrl);
       setHasUnsavedOrgLogo(true);
-      toast.success('Logo uploaded successfully');
+      toast.success("Logo uploaded successfully");
     } catch (error) {
-      toast.error('Failed to upload logo');
+      console.error(error);
+      toast.error("Failed to upload logo");
     } finally {
       setIsUploadingOrgLogo(false);
     }
@@ -345,9 +500,12 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
   };
 
   const handleSaveProfile = async () => {
-    const wordCount = biography.trim().split(/\s+/).filter(word => word.length > 0).length;
+    const wordCount = biography
+      .trim()
+      .split(/\s+/)
+      .filter((word) => word.length > 0).length;
     if (wordCount > 500) {
-      toast.error('Biography must be 500 words or less');
+      toast.error("Biography must be 500 words or less");
       return;
     }
 
@@ -359,7 +517,7 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
       biography: biography,
       profile_photo_url: profilePhotoUrl,
       linkedin_url: linkedinUrl,
-      show_in_directory: showInDirectory // Add show_in_directory to profileData
+      show_in_directory: showInDirectory
     };
     updateProfileMutation.mutate(profileData);
   };
@@ -372,9 +530,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
   };
 
   const handleSubcategoryToggle = (subcategory) => {
-    setSelectedSubcategories(prev => {
+    setSelectedSubcategories((prev) => {
       const newSelection = prev.includes(subcategory)
-        ? prev.filter(s => s !== subcategory)
+        ? prev.filter((s) => s !== subcategory)
         : [...prev, subcategory];
       setHasUnsavedChanges(true);
       return newSelection;
@@ -382,7 +540,7 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
   };
 
   const handleCategoryExpand = (categoryName) => {
-    setExpandedCategories(prev => {
+    setExpandedCategories((prev) => {
       const newExpanded = {
         ...prev,
         [categoryName]: !prev[categoryName]
@@ -392,42 +550,70 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
     });
   };
 
+  // 🔹 Track profile unsaved changes
   useEffect(() => {
     if (memberRecord) {
-      const hasChanges = 
+      const hasChanges =
         firstName !== (memberRecord.first_name || "") ||
         lastName !== (memberRecord.last_name || "") ||
         jobTitle !== (memberRecord.job_title || "") ||
         biography !== (memberRecord.biography || "") ||
         profilePhotoUrl !== (memberRecord.profile_photo_url || "") ||
         linkedinUrl !== (memberRecord.linkedin_url || "") ||
-        showInDirectory !== (memberRecord.show_in_directory !== false); // Compare with existing value, defaulting to true
+        showInDirectory !== (memberRecord.show_in_directory !== false);
       setHasUnsavedProfile(hasChanges);
     }
-  }, [firstName, lastName, jobTitle, biography, profilePhotoUrl, linkedinUrl, showInDirectory, memberRecord]);
+  }, [
+    firstName,
+    lastName,
+    jobTitle,
+    biography,
+    profilePhotoUrl,
+    linkedinUrl,
+    showInDirectory,
+    memberRecord
+  ]);
 
+  // 🔹 Track org logo unsaved changes
   useEffect(() => {
     if (organizationInfo) {
-      const hasChanges = organizationLogoUrl !== (organizationInfo.logo_url || "");
+      const hasChanges =
+        organizationLogoUrl !== (organizationInfo.logo_url || "");
       setHasUnsavedOrgLogo(hasChanges);
     }
   }, [organizationLogoUrl, organizationInfo]);
 
-  const filteredCategories = categories.filter(cat => {
+  const filteredCategories = categories.filter((cat) => {
     if (!searchQuery) return true;
     const searchLower = searchQuery.toLowerCase();
-    return cat.name.toLowerCase().includes(searchLower) ||
-           (cat.subcategories && cat.subcategories.some(sub => 
-             sub.toLowerCase().includes(searchLower)
-           ));
+    return (
+      cat.name.toLowerCase().includes(searchLower) ||
+      (cat.subcategories &&
+        cat.subcategories.some((sub) =>
+          sub.toLowerCase().includes(searchLower)
+        ))
+    );
   });
 
   const getBiographyWordCount = () => {
-    return biography.trim().split(/\s+/).filter(word => word.length > 0).length;
+    return biography
+      .trim()
+      .split(/\s+/)
+      .filter((word) => word.length > 0).length;
   };
 
-  const isLoading = userLoading || categoriesLoading || memberLoading || offlineAssignmentsLoading || offlineAwardsLoading || groupAssignmentsLoading;
-  const canEditBiography = !isFeatureExcluded || !isFeatureExcluded('edit_professional_biography');
+  const isLoading =
+    userLoading ||
+    categoriesLoading ||
+    memberLoading ||
+    offlineAssignmentsLoading ||
+    offlineAwardsLoading ||
+    groupAssignmentsLoading ||
+    awardsLoading ||
+    groupsLoading;
+
+  const canEditBiography =
+    !isFeatureExcluded || !isFeatureExcluded("edit_professional_biography");
 
   if (isLoading) {
     return (
@@ -444,7 +630,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
           <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-2">
             Preferences
           </h1>
-          <p className="text-slate-600">Manage your profile and content preferences</p>
+          <p className="text-slate-600">
+            Manage your profile and content preferences
+          </p>
         </div>
 
         {/* Organization Logo Section - Only for non-team members with organization info */}
@@ -462,7 +650,11 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                 <div className="flex items-center gap-4">
                   <div className="w-24 h-24 rounded-lg bg-slate-100 flex items-center justify-center overflow-hidden border-2 border-slate-200">
                     {organizationLogoUrl ? (
-                      <img src={organizationLogoUrl} alt="Organization Logo" className="w-full h-full object-contain" />
+                      <img
+                        src={organizationLogoUrl}
+                        alt="Organization Logo"
+                        className="w-full h-full object-contain"
+                      />
                     ) : (
                       <Building2 className="w-12 h-12 text-slate-400" />
                     )}
@@ -479,7 +671,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                       type="button"
                       variant="outline"
                       disabled={isUploadingOrgLogo}
-                      onClick={() => document.getElementById('org-logo-upload').click()}
+                      onClick={() =>
+                        document.getElementById("org-logo-upload").click()
+                      }
                     >
                       {isUploadingOrgLogo ? (
                         <>
@@ -493,15 +687,17 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                         </>
                       )}
                     </Button>
-                    <p className="text-xs text-slate-500 mt-1">JPG, PNG or GIF. Max 5MB.</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      JPG, PNG or GIF. Max 5MB.
+                    </p>
                   </div>
                 </div>
               </div>
 
               {hasUnsavedOrgLogo && (
                 <div className="flex justify-end pt-4">
-                  <Button 
-                    onClick={handleSaveOrgLogo} 
+                  <Button
+                    onClick={handleSaveOrgLogo}
                     disabled={updateOrganizationLogoMutation.isPending}
                     className="bg-blue-600 hover:bg-blue-700"
                   >
@@ -527,9 +723,7 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
         <Card className="border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle>Profile Information</CardTitle>
-            <CardDescription>
-              Update your personal details
-            </CardDescription>
+            <CardDescription>Update your personal details</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -537,7 +731,11 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
               <div className="flex items-center gap-4">
                 <div className="w-24 h-24 rounded-full bg-slate-100 flex items-center justify-center overflow-hidden border-2 border-slate-200">
                   {profilePhotoUrl ? (
-                    <img src={profilePhotoUrl} alt="Profile" className="w-full h-full object-cover" />
+                    <img
+                      src={profilePhotoUrl}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
                     <User className="w-12 h-12 text-slate-400" />
                   )}
@@ -554,7 +752,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                     type="button"
                     variant="outline"
                     disabled={isUploadingPhoto}
-                    onClick={() => document.getElementById('photo-upload').click()}
+                    onClick={() =>
+                      document.getElementById("photo-upload").click()
+                    }
                   >
                     {isUploadingPhoto ? (
                       <>
@@ -568,7 +768,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                       </>
                     )}
                   </Button>
-                  <p className="text-xs text-slate-500 mt-1">JPG, PNG or GIF. Max 5MB.</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    JPG, PNG or GIF. Max 5MB.
+                  </p>
                 </div>
               </div>
             </div>
@@ -621,7 +823,8 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                   Show in Member Directory
                 </Label>
                 <p className="text-xs text-slate-500 mt-1">
-                  Allow other members to see your profile in the member directory
+                  Allow other members to see your profile in the member
+                  directory
                 </p>
               </div>
               <Switch
@@ -637,7 +840,10 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                 <div>
                   <p className="text-sm text-slate-600">Member since</p>
                   <p className="text-sm font-semibold text-slate-900">
-                    {format(new Date(memberRecord.created_date), 'dd MMMM yyyy')}
+                    {format(
+                      new Date(memberRecord.created_date),
+                      "dd MMMM yyyy"
+                    )}
                   </p>
                 </div>
               </div>
@@ -645,8 +851,8 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
 
             {hasUnsavedProfile && (
               <div className="flex justify-end pt-4">
-                <Button 
-                  onClick={handleSaveProfile} 
+                <Button
+                  onClick={handleSaveProfile}
                   disabled={isSavingProfile}
                   className="bg-blue-600 hover:bg-blue-700"
                 >
@@ -686,7 +892,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-blue-900">
-                        {statsLoading ? '-' : engagementStats?.eventsAttended || 0}
+                        {statsLoading
+                          ? "-"
+                          : engagementStats?.eventsAttended || 0}
                       </p>
                       <p className="text-xs text-blue-700">Events Attended</p>
                     </div>
@@ -700,9 +908,13 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-purple-900">
-                        {statsLoading ? '-' : engagementStats?.articlesWritten || 0}
+                        {statsLoading
+                          ? "-"
+                          : engagementStats?.articlesWritten || 0}
                       </p>
-                      <p className="text-xs text-purple-700">Articles Published</p>
+                      <p className="text-xs text-purple-700">
+                        Articles Published
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -714,7 +926,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-green-900">
-                        {statsLoading ? '-' : engagementStats?.jobsPosted || 0}
+                        {statsLoading
+                          ? "-"
+                          : engagementStats?.jobsPosted || 0}
                       </p>
                       <p className="text-xs text-green-700">Jobs Posted</p>
                     </div>
@@ -727,23 +941,38 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                 <div className="pt-4 border-t border-slate-200">
                   <div className="flex items-center gap-2 mb-4">
                     <Users className="w-5 h-5 text-blue-600" />
-                    <h3 className="text-sm font-semibold text-slate-900">Your Groups</h3>
-                    <Badge variant="secondary">{groupAssignments.length}</Badge>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Your Groups
+                    </h3>
+                    <Badge variant="secondary">
+                      {groupAssignments.length}
+                    </Badge>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {groupAssignments.map(assignment => {
-                      const group = memberGroups.find(g => g.id === assignment.group_id);
+                    {groupAssignments.map((assignment) => {
+                      const group = memberGroups.find(
+                        (g) => g.id === assignment.group_id
+                      );
                       if (!group) return null;
                       return (
-                        <div key={assignment.id} className="flex items-start gap-3 p-3 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200">
+                        <div
+                          key={assignment.id}
+                          className="flex items-start gap-3 p-3 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200"
+                        >
                           <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                             <Users className="w-5 h-5 text-white" />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-slate-900 truncate">{group.name}</p>
-                            <p className="text-xs text-blue-700 font-medium">{assignment.group_role}</p>
+                            <p className="text-sm font-semibold text-slate-900 truncate">
+                              {group.name}
+                            </p>
+                            <p className="text-xs text-blue-700 font-medium">
+                              {assignment.group_role}
+                            </p>
                             {group.description && (
-                              <p className="text-xs text-slate-600 mt-1 line-clamp-2">{group.description}</p>
+                              <p className="text-xs text-slate-600 mt-1 line-clamp-2">
+                                {group.description}
+                              </p>
                             )}
                           </div>
                         </div>
@@ -754,64 +983,113 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
               )}
 
               {/* Awards Section */}
-              {(earnedOnlineAwards.length > 0 || earnedOfflineAwards.length > 0) && (
+              {(earnedOnlineAwards.length > 0 ||
+                earnedOfflineAwards.length > 0) && (
                 <div className="pt-4 border-t border-slate-200">
                   <div className="flex items-center gap-2 mb-4">
                     <Trophy className="w-5 h-5 text-amber-600" />
-                    <h3 className="text-sm font-semibold text-slate-900">Your Awards</h3>
-                    <Badge variant="secondary">{earnedOnlineAwards.length + earnedOfflineAwards.length}</Badge>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      Your Awards
+                    </h3>
+                    <Badge variant="secondary">
+                      {earnedOnlineAwards.length + earnedOfflineAwards.length}
+                    </Badge>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                    {earnedOnlineAwards.map(award => {
-                      const classification = award.classification_id ? awardClassifications.find(c => c.id === award.classification_id) : null;
+                    {earnedOnlineAwards.map((award) => {
+                      const classification = award.classification_id
+                        ? awardClassifications.find(
+                            (c) => c.id === award.classification_id
+                          )
+                        : null;
                       return (
-                        <div key={`online-${award.id}`} className="flex flex-col items-center p-3 bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg border border-amber-200 hover:shadow-md transition-shadow relative">
+                        <div
+                          key={`online-${award.id}`}
+                          className="flex flex-col items-center p-3 bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg border border-amber-200 hover:shadow-md transition-shadow relative"
+                        >
                           {classification && (
-                            <Badge variant="secondary" className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5">
+                            <Badge
+                              variant="secondary"
+                              className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5"
+                            >
                               {classification.name}
                             </Badge>
                           )}
                           {award.image_url ? (
-                            <img src={award.image_url} alt={award.name} className="w-12 h-12 object-contain mb-2" />
+                            <img
+                              src={award.image_url}
+                              alt={award.name}
+                              className="w-12 h-12 object-contain mb-2"
+                            />
                           ) : (
                             <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center mb-2">
                               <Trophy className="w-6 h-6 text-white" />
                             </div>
                           )}
-                          <p className="text-xs font-semibold text-center text-slate-900 line-clamp-2">{award.name}</p>
+                          <p className="text-xs font-semibold text-center text-slate-900 line-clamp-2">
+                            {award.name}
+                          </p>
                           {award.description && (
-                            <p className="text-xs text-slate-600 text-center mt-1 line-clamp-2">{award.description}</p>
+                            <p className="text-xs text-slate-600 text-center mt-1 line-clamp-2">
+                              {award.description}
+                            </p>
                           )}
                         </div>
                       );
                     })}
                     {earnedOfflineAwards.map((award, idx) => {
-                      const classification = award.classification_id ? awardClassifications.find(c => c.id === award.classification_id) : null;
+                      const classification = award.classification_id
+                        ? awardClassifications.find(
+                            (c) => c.id === award.classification_id
+                          )
+                        : null;
                       return (
-                        <div key={`offline-${award.id}-${idx}`} className="flex flex-col items-center p-3 bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg border border-purple-200 hover:shadow-md transition-shadow relative">
+                        <div
+                          key={`offline-${award.id}-${idx}`}
+                          className="flex flex-col items-center p-3 bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg border border-purple-200 hover:shadow-md transition-shadow relative"
+                        >
                           {classification && (
-                            <Badge variant="secondary" className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5">
+                            <Badge
+                              variant="secondary"
+                              className="absolute top-1 right-1 text-[10px] px-1.5 py-0.5"
+                            >
                               {classification.name}
                             </Badge>
                           )}
                           {award.sublevel?.image_url ? (
-                            <img src={award.sublevel.image_url} alt={award.sublevel.name} className="w-12 h-12 object-contain mb-2" />
+                            <img
+                              src={award.sublevel.image_url}
+                              alt={award.sublevel.name}
+                              className="w-12 h-12 object-contain mb-2"
+                            />
                           ) : award.image_url ? (
-                            <img src={award.image_url} alt={award.name} className="w-12 h-12 object-contain mb-2" />
+                            <img
+                              src={award.image_url}
+                              alt={award.name}
+                              className="w-12 h-12 object-contain mb-2"
+                            />
                           ) : (
                             <div className="w-12 h-12 bg-gradient-to-br from-purple-400 to-purple-600 rounded-full flex items-center justify-center mb-2">
                               <Trophy className="w-6 h-6 text-white" />
                             </div>
                           )}
-                          <p className="text-xs font-semibold text-center text-slate-900 line-clamp-2">{award.name}</p>
+                          <p className="text-xs font-semibold text-center text-slate-900 line-clamp-2">
+                            {award.name}
+                          </p>
                           {award.sublevel && (
-                            <Badge className="mt-1 bg-purple-600 text-white text-[10px]">{award.sublevel.name}</Badge>
+                            <Badge className="mt-1 bg-purple-600 text-white text-[10px]">
+                              {award.sublevel.name}
+                            </Badge>
                           )}
                           {award.period_text && (
-                            <p className="text-xs text-purple-700 text-center mt-1 font-medium">{award.period_text}</p>
+                            <p className="text-xs text-purple-700 text-center mt-1 font-medium">
+                              {award.period_text}
+                            </p>
                           )}
                           {award.description && (
-                            <p className="text-xs text-slate-600 text-center mt-1 line-clamp-2">{award.description}</p>
+                            <p className="text-xs text-slate-600 text-center mt-1 line-clamp-2">
+                              {award.description}
+                            </p>
                           )}
                         </div>
                       );
@@ -824,7 +1102,13 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
               <div className="space-y-2 pt-4 border-t border-slate-200">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="biography">Professional Biography</Label>
-                  <span className={`text-xs ${getBiographyWordCount() > 500 ? 'text-red-600 font-semibold' : 'text-slate-500'}`}>
+                  <span
+                    className={`text-xs ${
+                      getBiographyWordCount() > 500
+                        ? "text-red-600 font-semibold"
+                        : "text-slate-500"
+                    }`}
+                  >
                     {getBiographyWordCount()} / 500 words
                   </span>
                 </div>
@@ -842,9 +1126,11 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
 
               {hasUnsavedProfile && (
                 <div className="flex justify-end pt-4">
-                  <Button 
-                    onClick={handleSaveProfile} 
-                    disabled={isSavingProfile || getBiographyWordCount() > 500}
+                  <Button
+                    onClick={handleSaveProfile}
+                    disabled={
+                      isSavingProfile || getBiographyWordCount() > 500
+                    }
                     className="bg-blue-600 hover:bg-blue-700"
                   >
                     {isSavingProfile ? (
@@ -876,7 +1162,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
           <CardContent className="space-y-6">
             <div className="grid md:grid-cols-2 gap-6">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900 mb-4">Browse Topics</h3>
+                <h3 className="text-sm font-semibold text-slate-900 mb-4">
+                  Browse Topics
+                </h3>
                 <div className="border border-slate-200 rounded-lg bg-slate-50 p-4 max-h-[600px] overflow-y-auto">
                   <ResourceFilter
                     categories={filteredCategories}
@@ -891,7 +1179,9 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
 
               <div>
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold text-slate-900">Your Interests</h3>
+                  <h3 className="text-sm font-semibold text-slate-900">
+                    Your Interests
+                  </h3>
                   {selectedSubcategories.length > 0 && (
                     <Button
                       variant="ghost"
@@ -903,21 +1193,24 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
                     </Button>
                   )}
                 </div>
-                
+
                 {selectedSubcategories.length === 0 ? (
                   <div className="border border-dashed border-slate-300 rounded-lg p-8 text-center">
                     <p className="text-slate-500 text-sm">
-                      No interests selected yet. Browse topics on the left to get started.
+                      No interests selected yet. Browse topics on the left to
+                      get started.
                     </p>
                   </div>
                 ) : (
                   <div className="border border-slate-200 rounded-lg bg-white p-4 space-y-2 max-h-[600px] overflow-y-auto">
-                    {selectedSubcategories.map(subcategory => (
+                    {selectedSubcategories.map((subcategory) => (
                       <div
                         key={subcategory}
                         className="flex items-center justify-between p-2 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                       >
-                        <span className="text-sm text-slate-900">{subcategory}</span>
+                        <span className="text-sm text-slate-900">
+                          {subcategory}
+                        </span>
                         <button
                           onClick={() => handleSubcategoryToggle(subcategory)}
                           className="text-slate-500 hover:text-slate-700"
@@ -933,8 +1226,8 @@ export default function PreferencesPage({ memberInfo, organizationInfo, reloadMe
 
             {hasUnsavedChanges && (
               <div className="flex justify-end pt-4 border-t border-slate-200">
-                <Button 
-                  onClick={handleSavePreferences} 
+                <Button
+                  onClick={handleSavePreferences}
                   disabled={isSaving}
                   className="bg-blue-600 hover:bg-blue-700"
                 >
