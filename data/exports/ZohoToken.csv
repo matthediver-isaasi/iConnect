@@ -1,0 +1,2 @@
+access_token,refresh_token,expires_at,token_type,id,created_date,updated_date,created_by_id,created_by,is_sample
+1000.6fa3d8fae520fec9280637d380051473.41ccf8b5f705c5b6ad110021629ffc53,1000.800b4dff4bdcfb41546a3f0b8bdd50c3.6729b15328006c600929199a169f74f3,2025-11-25T22:34:06.288Z,Bearer,68efcf26597293a7cc7664db,2025-10-15T16:43:18.981000,2025-11-25T21:34:06.476000,service_9d076144-626b-48b5-85cf-5069ddbffdcd,service+9d076144-626b-48b5-85cf-5069ddbffdcd@no-reply.base44.com,false
