@@ -418,7 +418,7 @@ const { data: borderRadiusSetting = DEFAULT_BORDER_RADIUS } = useQuery({
   queryKey: ['borderRadiusSetting'],
   queryFn: async () => {
     const { data, error } = await supabase
-      .from('SystemSettings')
+      .from('system_settings')
       .select('setting_value')
       .eq('setting_key', 'global_border_radius')
       .maybeSingle(); // or .single() depending on your setup
@@ -448,7 +448,7 @@ const { data: memberRecord } = useQuery({
   refetchOnMount: false,
   queryFn: async () => {
     const { data, error } = await supabase
-      .from('Member')          // or 'members'
+      .from('member')          // or 'members'
       .select('*')
       .eq('email', memberInfo.email)
       .maybeSingle();          // returns single row or null
