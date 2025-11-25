@@ -1,13 +1,20 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { User, Loader2, AlertCircle, CheckCircle2, Shield, Copy } from "lucide-react";
+import {
+  User,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  Shield,
+  Copy
+} from "lucide-react";
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
+import { supabase } from "@/api/supabaseClient";
 
 export default function TestLoginPage() {
   const [email, setEmail] = useState("");
@@ -15,9 +22,25 @@ export default function TestLoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
 
-  const { data: roles, isLoading: rolesLoading } = useQuery({
-    queryKey: ['roles'],
-    queryFn: () => base44.entities.Role.list(),
+  // ✅ Load roles from Supabase instead of Base44
+  const {
+    data: roles = [],
+    isLoading: rolesLoading,
+    error: rolesError,
+  } = useQuery({
+    queryKey: ["roles"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("role") // table name from our generated schema
+        .select("*")
+        .order("name", { ascending: true });
+
+      if (error) {
+        console.error("[TestLogin] Error loading roles from Supabase:", error);
+        throw error;
+      }
+      return data || [];
+    },
     initialData: [],
   });
 
@@ -28,66 +51,108 @@ export default function TestLoginPage() {
     setSuccess(false);
 
     try {
-      console.log('[TestLogin] Calling validateUser with email:', email);
-      const response = await base44.functions.invoke('validateUser', { email });
-      console.log('[TestLogin] Response received:', response.data);
-      
-      if (response.data.success && response.data.user) {
-        // Add a session expiry (24 hours from now)
-        const memberData = {
-          ...response.data.user,
-          sessionExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-        };
+      console.log("[TestLogin] Looking up member by email in Supabase:", email);
 
-        // Store in sessionStorage
-        sessionStorage.setItem('agcas_member', JSON.stringify(memberData));
-        
-        // Update last_login for Member (not TeamMember)
-        if (memberData && !memberData.is_team_member && memberData.email) {
-          try {
-            // Find member by email
-            const allMembers = await base44.entities.Member.list();
-            const member = allMembers.find(m => m.email === memberData.email);
-            if (member) {
-              await base44.entities.Member.update(member.id, {
-                last_login: new Date().toISOString()
-              });
-              console.log('[TestLogin] Updated last_login for member:', member.email);
-            }
-          } catch (error) {
-            console.warn('[TestLogin] Failed to update last_login:', error.message);
-          }
-        }
-        
-        setSuccess(true);
-        
-        // Determine landing page based on role
-        let landingPage = 'Events'; // default fallback
-        
-        if (memberData.role_id) {
-          try {
-            const allRoles = await base44.entities.Role.list(); // Fetch roles again to ensure up-to-date data for redirection
-            const memberRole = allRoles.find(r => r.id === memberData.role_id);
-            
-            if (memberRole && memberRole.default_landing_page) {
-              landingPage = memberRole.default_landing_page;
-              console.log('[TestLogin] Using role default landing page:', landingPage);
-            }
-          } catch (roleError) {
-            console.warn('[TestLogin] Could not fetch role for landing page determination, using default Events:', roleError);
-          }
-        }
-        
-        // Redirect after a brief delay
-        setTimeout(() => {
-          window.location.href = createPageUrl(landingPage);
-        }, 1000);
-      } else {
-        setError(response.data.error || 'Failed to validate member');
+      // ✅ 1. Find member by email in Supabase
+      const {
+        data: member,
+        error: memberError,
+      } = await supabase
+        .from("member")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+
+      if (memberError) {
+        console.error("[TestLogin] Error fetching member:", memberError);
+        throw memberError;
       }
+
+      if (!member) {
+        setError("No member found with that email in the portal database.");
+        return;
+      }
+
+      // ✅ 2. Build memberData with a 24h session expiry
+      const memberData = {
+        ...member,
+        sessionExpiry: new Date(
+          Date.now() + 24 * 60 * 60 * 1000
+        ).toISOString(),
+      };
+
+      // Store in sessionStorage
+      sessionStorage.setItem("agcas_member", JSON.stringify(memberData));
+
+      // ✅ 3. Update last_login in Supabase (only for non-team-members if you keep that flag)
+      try {
+        // If you have an is_team_member flag in your member table, keep this check.
+        // Otherwise, remove `!memberData.is_team_member` from the condition.
+        if (!memberData.is_team_member && memberData.id) {
+          const { error: updateError } = await supabase
+            .from("member")
+            .update({ last_login: new Date().toISOString() })
+            .eq("id", memberData.id);
+
+          if (updateError) {
+            console.warn(
+              "[TestLogin] Failed to update last_login in Supabase:",
+              updateError.message
+            );
+          } else {
+            console.log(
+              "[TestLogin] Updated last_login for member:",
+              memberData.email
+            );
+          }
+        }
+      } catch (updateErr) {
+        console.warn(
+          "[TestLogin] Exception updating last_login:",
+          updateErr.message
+        );
+      }
+
+      setSuccess(true);
+
+      // ✅ 4. Determine landing page based on role from Supabase
+      let landingPage = "Events"; // default fallback
+
+      if (memberData.role_id) {
+        try {
+          const { data: role, error: roleError } = await supabase
+            .from("role")
+            .select("*")
+            .eq("id", memberData.role_id)
+            .maybeSingle();
+
+          if (roleError) {
+            console.warn(
+              "[TestLogin] Error fetching role for landing page:",
+              roleError
+            );
+          } else if (role && role.default_landing_page) {
+            landingPage = role.default_landing_page;
+            console.log(
+              "[TestLogin] Using role default landing page:",
+              landingPage
+            );
+          }
+        } catch (roleErr) {
+          console.warn(
+            "[TestLogin] Exception determining role landing page:",
+            roleErr
+          );
+        }
+      }
+
+      // ✅ 5. Redirect after a brief delay
+      setTimeout(() => {
+        window.location.href = createPageUrl(landingPage);
+      }, 1000);
     } catch (err) {
-      console.error('[TestLogin] Error:', err);
-      setError(err.response?.data?.error || 'An error occurred. Please try again.');
+      console.error("[TestLogin] Error:", err);
+      setError(err.message || "An error occurred. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -108,7 +173,8 @@ export default function TestLoginPage() {
             <div>
               <h3 className="font-bold text-sm">TEST MODE ONLY</h3>
               <p className="text-xs mt-1">
-                This page is for development testing only. Remove before production deployment.
+                This page is for development testing only. Remove before
+                production deployment.
               </p>
             </div>
           </div>
@@ -133,13 +199,16 @@ export default function TestLoginPage() {
             <CardContent>
               <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <label htmlFor="test-email" className="text-sm font-medium text-slate-300">
+                  <label
+                    htmlFor="test-email"
+                    className="text-sm font-medium text-slate-300"
+                  >
                     Member Email Address
                   </label>
                   <Input
                     id="test-email"
                     type="email"
-                    placeholder="Enter member email from Zoho CRM..."
+                    placeholder="Enter member email..."
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
@@ -147,7 +216,8 @@ export default function TestLoginPage() {
                     className="bg-slate-700 border-slate-600 text-white placeholder:text-slate-400"
                   />
                   <p className="text-xs text-slate-400">
-                    This will check Zoho CRM for the contact and create/update the member in Base44
+                    This will look up the member in the portal database and log
+                    you in for testing.
                   </p>
                 </div>
 
@@ -175,23 +245,25 @@ export default function TestLoginPage() {
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Validating with Zoho CRM...
+                      Validating member...
                     </>
                   ) : success ? (
-                    'Redirecting...'
+                    "Redirecting..."
                   ) : (
-                    'Login as Member'
+                    "Login as Member"
                   )}
                 </Button>
               </form>
 
               <div className="mt-6 pt-6 border-t border-slate-700">
-                <h4 className="text-sm font-semibold text-slate-300 mb-2">How It Works</h4>
+                <h4 className="text-sm font-semibold text-slate-300 mb-2">
+                  How It Works
+                </h4>
                 <div className="space-y-2 text-xs text-slate-400">
-                  <p>1. Enter any email from your Zoho CRM Contacts</p>
-                  <p>2. System validates against CRM and fetches account details</p>
-                  <p>3. Creates/updates Member record in Base44</p>
-                  <p>4. Logs you in as that member</p>
+                  <p>1. Enter any member email from your portal data</p>
+                  <p>2. System looks up the member in Supabase</p>
+                  <p>3. Stores a test session in your browser</p>
+                  <p>4. Redirects you to the member&apos;s landing page</p>
                 </div>
               </div>
             </CardContent>
@@ -205,7 +277,9 @@ export default function TestLoginPage() {
                   <Shield className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <CardTitle className="text-2xl text-white">Available Roles</CardTitle>
+                  <CardTitle className="text-2xl text-white">
+                    Available Roles
+                  </CardTitle>
                   <p className="text-sm text-slate-400 mt-1">
                     Copy role IDs to assign to members
                   </p>
@@ -217,12 +291,26 @@ export default function TestLoginPage() {
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
                 </div>
+              ) : rolesError ? (
+                <div className="text-center py-8">
+                  <Shield className="w-12 h-12 text-red-600 mx-auto mb-3" />
+                  <p className="text-sm text-red-400">
+                    Error loading roles from Supabase
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Check the role table and Supabase connection.
+                  </p>
+                </div>
               ) : roles.length === 0 ? (
                 <div className="text-center py-8">
                   <Shield className="w-12 h-12 text-slate-600 mx-auto mb-3" />
                   <p className="text-sm text-slate-400">No roles created yet</p>
                   <p className="text-xs text-slate-500 mt-1">
-                    Create roles in the Role entity first
+                    Import roles into the{" "}
+                    <code className="px-1 py-0.5 bg-slate-700 rounded">
+                      role
+                    </code>{" "}
+                    table in Supabase.
                   </p>
                 </div>
               ) : (
@@ -256,7 +344,7 @@ export default function TestLoginPage() {
                           )}
                         </div>
                       </div>
-                      
+
                       <div className="flex items-center gap-2">
                         <code className="flex-1 text-xs bg-slate-900 text-blue-300 px-2 py-1 rounded overflow-x-auto">
                           {role.id}
@@ -264,32 +352,39 @@ export default function TestLoginPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => copyToClipboard(role.id, 'Role ID')}
+                          onClick={() =>
+                            copyToClipboard(role.id, "Role ID")
+                          }
                           className="shrink-0 text-slate-400 hover:text-white h-7"
                         >
                           <Copy className="w-3 h-3" />
                         </Button>
                       </div>
 
-                      {role.excluded_features && role.excluded_features.length > 0 && (
-                        <div className="mt-2 pt-2 border-t border-slate-600">
-                          <p className="text-xs text-slate-500">
-                            {role.excluded_features.length} feature(s) restricted
-                          </p>
-                        </div>
-                      )}
+                      {role.excluded_features &&
+                        role.excluded_features.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-slate-600">
+                            <p className="text-xs text-slate-500">
+                              {role.excluded_features.length} feature(s) restricted
+                            </p>
+                          </div>
+                        )}
                     </div>
                   ))}
                 </div>
               )}
 
               <div className="mt-4 pt-4 border-t border-slate-700">
-                <h4 className="text-sm font-semibold text-slate-300 mb-2">How to Use</h4>
+                <h4 className="text-sm font-semibold text-slate-300 mb-2">
+                  How to Use
+                </h4>
                 <ol className="space-y-1 text-xs text-slate-400 list-decimal list-inside">
                   <li>Click copy button to copy a role ID</li>
-                  <li>Go to Dashboard → Data → Member</li>
-                  <li>Edit a member and paste ID into <code className="px-1 py-0.5 bg-slate-700 rounded">role_id</code> field</li>
-                  <li>Save and test login with that member's email</li>
+                  <li>In Supabase, ensure your member records have a role_id</li>
+                  <li>
+                    Use this page to test login and landing page behaviour for each
+                    role
+                  </li>
                 </ol>
               </div>
             </CardContent>
@@ -297,8 +392,8 @@ export default function TestLoginPage() {
         </div>
 
         <div className="mt-4 text-center">
-          <a 
-            href={createPageUrl('Home')}
+          <a
+            href={createPageUrl("Home")}
             className="text-sm text-slate-400 hover:text-slate-300 transition-colors"
           >
             ← Back to normal login
