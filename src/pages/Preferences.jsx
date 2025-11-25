@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/api/supabaseClient";
+import { supabase } from "@/api/supabaseClient"; // or your actual client path
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +9,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription
+  CardDescription,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -25,18 +25,14 @@ import {
   Building2,
   Users,
   CalendarDays,
-  Save
+  Save,
 } from "lucide-react";
 import { format } from "date-fns";
 import ResourceFilter from "../components/resources/ResourceFilter";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 
-
-
-
-
-// Helper: upload an image to Supabase storage and return a public URL
+// --- Helper: upload to Supabase Storage and return public URL ---
 async function uploadImageToSupabase(file, bucket, folderPrefix = "") {
   const fileExt = file.name.split(".").pop();
   const fileName = `${folderPrefix ? `${folderPrefix}/` : ""}${Date.now()}-${Math
@@ -57,12 +53,8 @@ async function uploadImageToSupabase(file, bucket, folderPrefix = "") {
   return publicData.publicUrl;
 }
 
-export default function PreferencesPage({
-  memberInfo,
-  organizationInfo,
-  reloadMemberInfo,
-  isFeatureExcluded
-}) {
+export default function PreferencesPage() {
+  // Resource prefs
   const [selectedSubcategories, setSelectedSubcategories] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -81,69 +73,98 @@ export default function PreferencesPage({
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [showInDirectory, setShowInDirectory] = useState(true);
 
-  // Organization logo state
+  // Organisation logo state
   const [organizationLogoUrl, setOrganizationLogoUrl] = useState("");
   const [isUploadingOrgLogo, setIsUploadingOrgLogo] = useState(false);
   const [hasUnsavedOrgLogo, setHasUnsavedOrgLogo] = useState(false);
 
   const queryClient = useQueryClient();
 
-  // 🔹 Current auth user (with preferences stored in user_metadata.preferences)
-  const { data: currentUser, isLoading: userLoading } = useQuery({
+  // --- Supabase: current auth user ---
+  const {
+    data: currentUser,
+    isLoading: userLoading,
+    error: authError,
+  } = useQuery({
     queryKey: ["currentUser"],
     queryFn: async () => {
       const { data, error } = await supabase.auth.getUser();
       if (error) throw error;
-      return data.user;
+      return data.user; // may be null if not logged in
     },
-    staleTime: 30 * 1000
+    staleTime: 30 * 1000,
   });
 
-  // 🔹 Member record (linked to email)
-  const { data: memberRecord, isLoading: memberLoading, error: memberError } =
-  useQuery({
-    queryKey: ["memberRecord", memberInfo?.email],
+  // --- Member record (by auth email) ---
+  const {
+    data: memberRecord,
+    isLoading: memberLoading,
+    error: memberError,
+  } = useQuery({
+    queryKey: ["memberRecord", currentUser?.email],
+    enabled: !!currentUser?.email,
+    staleTime: 30 * 1000,
     queryFn: async () => {
-      console.log("[Preferences] memberInfo in queryFn:", memberInfo);
-
-      if (!memberInfo?.email) {
-        console.warn("[Preferences] memberInfo.email is missing, skipping members query");
-        return null;
-      }
+      if (!currentUser?.email) return null;
 
       const { data, error } = await supabase
         .from("members")
         .select("*")
-        .eq("email", memberInfo.email)
+        .eq("email", currentUser.email)
         .limit(1);
 
-      if (error) {
-        console.error("[Preferences] members query error:", error);
-        throw error;
-      }
-
-      console.log("[Preferences] members query data:", data);
+      if (error) throw error;
       return data?.[0] || null;
     },
-    enabled: !!memberInfo?.email,
-    staleTime: 30 * 1000
   });
 
+  // --- Organization (from memberRecord.organization_id) ---
+  const {
+    data: organizationInfo,
+    isLoading: orgLoading,
+    error: orgError,
+  } = useQuery({
+    queryKey: ["organization", memberRecord?.organization_id],
+    enabled: !!memberRecord?.organization_id,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      if (!memberRecord?.organization_id) return null;
+      const { data, error } = await supabase
+        .from("organizations")
+        .select("*")
+        .eq("id", memberRecord.organization_id)
+        .limit(1);
+      if (error) throw error;
+      return data?.[0] || null;
+    },
+  });
 
-  // 🔹 Engagement statistics (events attended, articles written, jobs posted)
-  const { data: engagementStats, isLoading: statsLoading } = useQuery({
+  // Helper to mimic old isFeatureExcluded prop:
+  const isFeatureExcluded = (featureKey) =>
+    !!memberRecord?.member_excluded_features?.includes(featureKey);
+
+  // crude "is team member" flag – adjust if you later add a real column
+  const isTeamMember =
+    memberRecord?.is_team_member ?? false; // fallback to false if not present
+
+  // --- Engagement stats (events, articles, jobs) ---
+  const {
+    data: engagementStats,
+    isLoading: statsLoading,
+  } = useQuery({
     queryKey: ["engagementStats", memberRecord?.id],
+    enabled: !!memberRecord?.id,
+    staleTime: 60 * 1000,
     queryFn: async () => {
       if (!memberRecord?.id) {
         return { eventsAttended: 0, articlesWritten: 0, jobsPosted: 0 };
       }
-
       const memberId = memberRecord.id;
 
       const [
         { data: bookings = [], error: bookingsError },
         { data: articles = [], error: articlesError },
-        { data: jobPostings = [], error: jobsError }
+        { data: jobPostings = [], error: jobsError },
       ] = await Promise.all([
         supabase
           .from("bookings")
@@ -158,147 +179,149 @@ export default function PreferencesPage({
         supabase
           .from("job_postings")
           .select("id, posted_by_member_id")
-          .eq("posted_by_member_id", memberId)
+          .eq("posted_by_member_id", memberId),
       ]);
 
       if (bookingsError) throw bookingsError;
       if (articlesError) throw articlesError;
       if (jobsError) throw jobsError;
 
-      const eventsAttended = bookings.length;
-      const articlesWritten = articles.length;
-      const jobsPosted = jobPostings.length;
-
-      return { eventsAttended, articlesWritten, jobsPosted };
+      return {
+        eventsAttended: bookings.length,
+        articlesWritten: articles.length,
+        jobsPosted: jobPostings.length,
+      };
     },
-    enabled: !!memberRecord?.id,
-    staleTime: 60 * 1000
   });
 
-  // 🔹 Online awards
+  // --- Online awards ---
   const { data: awards = [], isLoading: awardsLoading } = useQuery({
     queryKey: ["awards"],
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("award")
+        .from("awards")
         .select("*")
         .eq("is_active", true)
         .order("level", { ascending: true });
       if (error) throw error;
       return data || [];
     },
-    staleTime: 5 * 60 * 1000
   });
 
-  // 🔹 Offline award assignments (for current member)
-  const { data: offlineAssignments = [], isLoading: offlineAssignmentsLoading } =
-    useQuery({
-      queryKey: ["myOfflineAwardAssignments", memberRecord?.id],
-      queryFn: async () => {
-        if (!memberRecord?.id) return [];
-        const { data, error } = await supabase
-          .from("offline_award_assignment")
-          .select("*")
-          .eq("member_id", memberRecord.id);
-        if (error) throw error;
-        return data || [];
-      },
-      enabled: !!memberRecord?.id,
-      staleTime: 60 * 1000
-    });
+  // --- Offline award assignments ---
+  const {
+    data: offlineAssignments = [],
+    isLoading: offlineAssignmentsLoading,
+  } = useQuery({
+    queryKey: ["offlineAssignments", memberRecord?.id],
+    enabled: !!memberRecord?.id,
+    staleTime: 60 * 1000,
+    queryFn: async () => {
+      if (!memberRecord?.id) return [];
+      const { data, error } = await supabase
+        .from("offline_award_assignments")
+        .select("*")
+        .eq("member_id", memberRecord.id);
+      if (error) throw error;
+      return data || [];
+    },
+  });
 
-  // 🔹 Award sublevels
+  // --- Award sublevels ---
   const { data: awardSublevels = [] } = useQuery({
     queryKey: ["awardSublevels"],
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("award_sublevel")
+        .from("award_sublevels")
         .select("*");
       if (error) throw error;
       return data || [];
     },
-    staleTime: 5 * 60 * 1000
   });
 
-  // 🔹 Member group assignments
-  const { data: groupAssignments = [], isLoading: groupAssignmentsLoading } =
+  // --- Member group assignments ---
+  const {
+    data: groupAssignments = [],
+    isLoading: groupAssignmentsLoading,
+  } = useQuery({
+    queryKey: ["groupAssignments", memberRecord?.id],
+    enabled: !!memberRecord?.id,
+    staleTime: 60 * 1000,
+    queryFn: async () => {
+      if (!memberRecord?.id) return [];
+      const { data, error } = await supabase
+        .from("member_group_assignments")
+        .select("*")
+        .eq("member_id", memberRecord.id);
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  // --- Member groups ---
+  const { data: memberGroups = [], isLoading: groupsLoading } = useQuery({
+    queryKey: ["memberGroups"],
+    enabled: groupAssignments.length > 0,
+    staleTime: 60 * 1000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("member_groups")
+        .select("*")
+        .eq("is_active", true);
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  // --- Offline awards ---
+  const { data: offlineAwards = [], isLoading: offlineAwardsLoading2 } =
     useQuery({
-      queryKey: ["myGroupAssignments", memberRecord?.id],
+      queryKey: ["offlineAwards"],
+      staleTime: 5 * 60 * 1000,
       queryFn: async () => {
-        if (!memberRecord?.id) return [];
         const { data, error } = await supabase
-          .from("member_group_assignment")
+          .from("offline_awards")
           .select("*")
-          .eq("member_id", memberRecord.id);
+          .eq("is_active", true);
         if (error) throw error;
         return data || [];
       },
-      enabled: !!memberRecord?.id,
-      staleTime: 60 * 1000
     });
 
-  // 🔹 Member groups
-  const { data: memberGroups = [], isLoading: groupsLoading } = useQuery({
-    queryKey: ["memberGroups"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("member_group")
-        .select("*")
-        .eq("is_active", true);
-      if (error) throw error;
-      return data || [];
-    },
-    enabled: groupAssignments.length > 0,
-    staleTime: 60 * 1000
-  });
-
-  // 🔹 Offline awards
-  const { data: offlineAwards = [], isLoading: offlineAwardsLoading } = useQuery({
-    queryKey: ["offlineAwards"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("offline_award")
-        .select("*")
-        .eq("is_active", true);
-      if (error) throw error;
-      return data || [];
-    },
-    staleTime: 5 * 60 * 1000
-  });
-
-  // 🔹 Award classifications
+  // --- Award classifications ---
   const { data: awardClassifications = [] } = useQuery({
     queryKey: ["awardClassifications"],
+    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("award_classification")
+        .from("award_classifications")
         .select("*");
       if (error) throw error;
       return data || [];
     },
-    staleTime: 5 * 60 * 1000
   });
 
-  // 🔹 Resource categories
+  // --- Resource categories ---
   const { data: categories = [], isLoading: categoriesLoading } = useQuery({
     queryKey: ["resourceCategories"],
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("resource_category")
+        .from("resource_categories")
         .select("*")
         .eq("is_active", true)
         .order("display_order", { ascending: true });
       if (error) throw error;
       return data || [];
     },
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
   });
 
-  // 🔹 Calculate earned online awards
+  // --- Derived awards from stats ---
   const earnedOnlineAwards = useMemo(() => {
     if (!engagementStats || !awards || awards.length === 0) return [];
-
     return awards.filter((award) => {
       const stat =
         award.award_type === "events_attended"
@@ -312,14 +335,14 @@ export default function PreferencesPage({
     });
   }, [engagementStats, awards]);
 
-  // 🔹 Get earned offline awards with sublevel info
   const earnedOfflineAwards = useMemo(() => {
     if (!offlineAssignments || offlineAssignments.length === 0 || !offlineAwards)
       return [];
-
     return offlineAssignments
       .map((assignment) => {
-        const award = offlineAwards.find((a) => a.id === assignment.offline_award_id);
+        const award = offlineAwards.find(
+          (a) => a.id === assignment.offline_award_id
+        );
         if (!award) return null;
         const sublevel = assignment.sublevel_id
           ? awardSublevels.find((s) => s.id === assignment.sublevel_id)
@@ -330,41 +353,27 @@ export default function PreferencesPage({
       .sort((a, b) => (a.level || 0) - (b.level || 0));
   }, [offlineAssignments, offlineAwards, awardSublevels]);
 
-  // 🔹 Load profile data when memberRecord is available
+  // --- Load profile state from memberRecord ---
   useEffect(() => {
-    console.log("[Preferences] memberRecord changed:", memberRecord);
-  
-    if (memberRecord) {
-      setFirstName(memberRecord.first_name || "EEK");
-      setLastName(memberRecord.last_name || "");
-      setJobTitle(memberRecord.job_title || "");
-      setBiography(memberRecord.biography || "");
-      setProfilePhotoUrl(memberRecord.profile_photo_url || "");
-      setLinkedinUrl(memberRecord.linkedin_url || "");
-      setShowInDirectory(memberRecord.show_in_directory !== false);
-    }
+    if (!memberRecord) return;
+
+    setFirstName(memberRecord.first_name || "");
+    setLastName(memberRecord.last_name || "");
+    setJobTitle(memberRecord.job_title || "");
+    setBiography(memberRecord.biography || "");
+    setProfilePhotoUrl(memberRecord.profile_photo_url || "");
+    setLinkedinUrl(memberRecord.linkedin_url || "");
+    setShowInDirectory(memberRecord.show_in_directory !== false);
   }, [memberRecord]);
-  
 
-  useEffect(() => {
-    console.log("[Preferences] memberInfo prop:", memberInfo);
-  }, [memberInfo]);
-  
-  useEffect(() => {
-    console.log("[Preferences] currentUser from auth:", currentUser);
-  }, [currentUser]);
-  
-  console.log("[Preferences] PROPS:", { memberInfo, organizationInfo, reloadMemberInfo, isFeatureExcluded });
-
-
-  // 🔹 Load organization logo
+  // --- Load organisation logo from orgInfo ---
   useEffect(() => {
     if (organizationInfo) {
       setOrganizationLogoUrl(organizationInfo.logo_url || "");
     }
   }, [organizationInfo]);
 
-  // 🔹 Load preferences from auth user_metadata
+  // --- Load preferences from auth user metadata ---
   useEffect(() => {
     if (currentUser?.user_metadata?.preferences) {
       const prefs = currentUser.user_metadata.preferences;
@@ -377,11 +386,11 @@ export default function PreferencesPage({
     }
   }, [currentUser]);
 
-  // 🔹 Save preferences (stored in Supabase auth user metadata)
+  // --- Mutations ---
   const savePreferencesMutation = useMutation({
     mutationFn: async (preferences) => {
       const { data, error } = await supabase.auth.updateUser({
-        data: { preferences }
+        data: { preferences },
       });
       if (error) throw error;
       return data;
@@ -395,10 +404,9 @@ export default function PreferencesPage({
     onError: () => {
       toast.error("Failed to save preferences");
       setIsSaving(false);
-    }
+    },
   });
 
-  // 🔹 Update profile (member record)
   const updateProfileMutation = useMutation({
     mutationFn: async (profileData) => {
       if (!memberRecord?.id) throw new Error("No member record");
@@ -417,17 +425,13 @@ export default function PreferencesPage({
       toast.success("Profile updated successfully");
       setHasUnsavedProfile(false);
       setIsSavingProfile(false);
-      if (reloadMemberInfo) {
-        reloadMemberInfo();
-      }
     },
     onError: () => {
       toast.error("Failed to update profile");
       setIsSavingProfile(false);
-    }
+    },
   });
 
-  // 🔹 Update organization logo
   const updateOrganizationLogoMutation = useMutation({
     mutationFn: async (logoUrl) => {
       if (!organizationInfo?.id) throw new Error("No organization");
@@ -441,16 +445,16 @@ export default function PreferencesPage({
       return data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["organization"] });
       toast.success("Organization logo updated successfully");
       setHasUnsavedOrgLogo(false);
     },
     onError: () => {
       toast.error("Failed to update organization logo");
-    }
+    },
   });
 
-  // 🔹 Photo upload (profile)
+  // --- Handlers ---
   const handlePhotoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -459,7 +463,6 @@ export default function PreferencesPage({
       toast.error("Please select an image file");
       return;
     }
-
     if (file.size > 5 * 1024 * 1024) {
       toast.error("Image must be less than 5MB");
       return;
@@ -476,15 +479,14 @@ export default function PreferencesPage({
       setProfilePhotoUrl(publicUrl);
       setHasUnsavedProfile(true);
       toast.success("Photo uploaded successfully");
-    } catch (error) {
-      console.error(error);
+    } catch (err) {
+      console.error(err);
       toast.error("Failed to upload photo");
     } finally {
       setIsUploadingPhoto(false);
     }
   };
 
-  // 🔹 Logo upload (organization)
   const handleOrgLogoUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -493,7 +495,6 @@ export default function PreferencesPage({
       toast.error("Please select an image file");
       return;
     }
-
     if (file.size > 5 * 1024 * 1024) {
       toast.error("Image must be less than 5MB");
       return;
@@ -510,48 +511,47 @@ export default function PreferencesPage({
       setOrganizationLogoUrl(publicUrl);
       setHasUnsavedOrgLogo(true);
       toast.success("Logo uploaded successfully");
-    } catch (error) {
-      console.error(error);
+    } catch (err) {
+      console.error(err);
       toast.error("Failed to upload logo");
     } finally {
       setIsUploadingOrgLogo(false);
     }
   };
 
-  const handleSaveOrgLogo = async () => {
+  const handleSaveOrgLogo = () => {
     updateOrganizationLogoMutation.mutate(organizationLogoUrl);
   };
 
-  const handleSavePreferences = async () => {
+  const handleSavePreferences = () => {
     setIsSaving(true);
     const preferences = {
       selectedSubcategories,
-      expandedCategories
+      expandedCategories,
     };
     savePreferencesMutation.mutate(preferences);
   };
 
-  const handleSaveProfile = async () => {
+  const handleSaveProfile = () => {
     const wordCount = biography
       .trim()
       .split(/\s+/)
-      .filter((word) => word.length > 0).length;
+      .filter((w) => w.length > 0).length;
     if (wordCount > 500) {
       toast.error("Biography must be 500 words or less");
       return;
     }
 
     setIsSavingProfile(true);
-    const profileData = {
+    updateProfileMutation.mutate({
       first_name: firstName,
       last_name: lastName,
       job_title: jobTitle,
-      biography: biography,
+      biography,
       profile_photo_url: profilePhotoUrl,
       linkedin_url: linkedinUrl,
-      show_in_directory: showInDirectory
-    };
-    updateProfileMutation.mutate(profileData);
+      show_in_directory: showInDirectory,
+    });
   };
 
   const handleResetFilters = () => {
@@ -573,28 +573,24 @@ export default function PreferencesPage({
 
   const handleCategoryExpand = (categoryName) => {
     setExpandedCategories((prev) => {
-      const newExpanded = {
-        ...prev,
-        [categoryName]: !prev[categoryName]
-      };
+      const next = { ...prev, [categoryName]: !prev[categoryName] };
       setHasUnsavedChanges(true);
-      return newExpanded;
+      return next;
     });
   };
 
-  // 🔹 Track profile unsaved changes
+  // --- Track profile / org changes ---
   useEffect(() => {
-    if (memberRecord) {
-      const hasChanges =
-        firstName !== (memberRecord.first_name || "") ||
-        lastName !== (memberRecord.last_name || "") ||
-        jobTitle !== (memberRecord.job_title || "") ||
-        biography !== (memberRecord.biography || "") ||
-        profilePhotoUrl !== (memberRecord.profile_photo_url || "") ||
-        linkedinUrl !== (memberRecord.linkedin_url || "") ||
-        showInDirectory !== (memberRecord.show_in_directory !== false);
-      setHasUnsavedProfile(hasChanges);
-    }
+    if (!memberRecord) return;
+    const changed =
+      firstName !== (memberRecord.first_name || "") ||
+      lastName !== (memberRecord.last_name || "") ||
+      jobTitle !== (memberRecord.job_title || "") ||
+      biography !== (memberRecord.biography || "") ||
+      profilePhotoUrl !== (memberRecord.profile_photo_url || "") ||
+      linkedinUrl !== (memberRecord.linkedin_url || "") ||
+      showInDirectory !== (memberRecord.show_in_directory !== false);
+    setHasUnsavedProfile(changed);
   }, [
     firstName,
     lastName,
@@ -603,18 +599,17 @@ export default function PreferencesPage({
     profilePhotoUrl,
     linkedinUrl,
     showInDirectory,
-    memberRecord
+    memberRecord,
   ]);
 
-  // 🔹 Track org logo unsaved changes
   useEffect(() => {
-    if (organizationInfo) {
-      const hasChanges =
-        organizationLogoUrl !== (organizationInfo.logo_url || "");
-      setHasUnsavedOrgLogo(hasChanges);
-    }
+    if (!organizationInfo) return;
+    const changed =
+      organizationLogoUrl !== (organizationInfo.logo_url || "");
+    setHasUnsavedOrgLogo(changed);
   }, [organizationLogoUrl, organizationInfo]);
 
+  // --- Filters / derived values ---
   const filteredCategories = categories.filter((cat) => {
     if (!searchQuery) return true;
     const searchLower = searchQuery.toLowerCase();
@@ -627,25 +622,26 @@ export default function PreferencesPage({
     );
   });
 
-  const getBiographyWordCount = () => {
-    return biography
+  const getBiographyWordCount = () =>
+    biography
       .trim()
       .split(/\s+/)
-      .filter((word) => word.length > 0).length;
-  };
+      .filter((w) => w.length > 0).length;
 
   const isLoading =
     userLoading ||
     categoriesLoading ||
     memberLoading ||
+    orgLoading ||
     offlineAssignmentsLoading ||
-    offlineAwardsLoading ||
+    offlineAwardsLoading2 ||
     groupAssignmentsLoading ||
     awardsLoading ||
     groupsLoading;
 
-  const canEditBiography =
-    !isFeatureExcluded || !isFeatureExcluded("edit_professional_biography");
+  const canEditBiography = !isFeatureExcluded(
+    "edit_professional_biography"
+  );
 
   if (isLoading) {
     return (
@@ -655,6 +651,7 @@ export default function PreferencesPage({
     );
   }
 
+  // --- UI identical to previous version (just without props) ---
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-4 md:p-8">
       <div className="max-w-4xl mx-auto space-y-8">
@@ -667,8 +664,8 @@ export default function PreferencesPage({
           </p>
         </div>
 
-        {/* Organization Logo Section - Only for non-team members with organization info */}
-        {organizationInfo && !memberInfo?.is_team_member && (
+        {/* Organization Logo Section - only if organizationInfo and not team member */}
+        {organizationInfo && !isTeamMember && (
           <Card className="border-slate-200 shadow-sm">
             <CardHeader>
               <CardTitle>Organization Logo</CardTitle>
@@ -866,14 +863,14 @@ export default function PreferencesPage({
               />
             </div>
 
-            {memberRecord?.created_date && (
+            {memberRecord?.created_at && (
               <div className="flex items-center gap-2 p-4 bg-slate-50 rounded-lg border border-slate-200">
                 <CalendarDays className="w-5 h-5 text-slate-500" />
                 <div>
                   <p className="text-sm text-slate-600">Member since</p>
                   <p className="text-sm font-semibold text-slate-900">
                     {format(
-                      new Date(memberRecord.created_date),
+                      new Date(memberRecord.created_at),
                       "dd MMMM yyyy"
                     )}
                   </p>
@@ -915,7 +912,7 @@ export default function PreferencesPage({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Engagement Stats */}
+              {/* Stats */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
                   <div className="flex items-center gap-3">
@@ -968,7 +965,7 @@ export default function PreferencesPage({
                 </div>
               </div>
 
-              {/* Member Groups Section */}
+              {/* Groups */}
               {groupAssignments.length > 0 && (
                 <div className="pt-4 border-t border-slate-200">
                   <div className="flex items-center gap-2 mb-4">
@@ -1014,7 +1011,7 @@ export default function PreferencesPage({
                 </div>
               )}
 
-              {/* Awards Section */}
+              {/* Awards */}
               {(earnedOnlineAwards.length > 0 ||
                 earnedOfflineAwards.length > 0) && (
                 <div className="pt-4 border-t border-slate-200">
@@ -1130,7 +1127,7 @@ export default function PreferencesPage({
                 </div>
               )}
 
-              {/* Biography Section */}
+              {/* Biography */}
               <div className="space-y-2 pt-4 border-t border-slate-200">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="biography">Professional Biography</Label>
@@ -1205,6 +1202,8 @@ export default function PreferencesPage({
                     searchQuery={searchQuery}
                     onSearchChange={setSearchQuery}
                     onClearSearch={() => setSearchQuery("")}
+                    onCategoryToggle={handleCategoryExpand}
+                    expandedCategories={expandedCategories}
                   />
                 </div>
               </div>
