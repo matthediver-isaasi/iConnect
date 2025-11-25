@@ -32,8 +32,8 @@ import ResourceFilter from "../components/resources/ResourceFilter";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 
-console.log("[Preferences] PROPS:", { memberInfo, organizationInfo, reloadMemberInfo, isFeatureExcluded });
-  
+
+
 
 
 // Helper: upload an image to Supabase storage and return a public URL
@@ -354,7 +354,7 @@ export default function PreferencesPage({
     console.log("[Preferences] currentUser from auth:", currentUser);
   }, [currentUser]);
   
-
+  console.log("[Preferences] PROPS:", { memberInfo, organizationInfo, reloadMemberInfo, isFeatureExcluded });
 
 
   // 🔹 Load organization logo
