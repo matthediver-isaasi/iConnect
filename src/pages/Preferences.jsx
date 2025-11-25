@@ -100,13 +100,15 @@ export default function PreferencesPage({
     queryKey: ["memberRecord", memberInfo?.email],
     queryFn: async () => {
       if (!memberInfo?.email) return null;
+  
       const { data, error } = await supabase
         .from("members")
         .select("*")
         .eq("email", memberInfo.email)
-        .maybeSingle();
+        .limit(1);               // <– make sure it's at most one row
+  
       if (error) throw error;
-      return data;
+      return data?.[0] || null;  // <– unwrap array into a single object
     },
     enabled: !!memberInfo?.email,
     staleTime: 30 * 1000
