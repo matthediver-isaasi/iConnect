@@ -96,23 +96,35 @@ export default function PreferencesPage({
   });
 
   // 🔹 Member record (linked to email)
-  const { data: memberRecord, isLoading: memberLoading } = useQuery({
+  const { data: memberRecord, isLoading: memberLoading, error: memberError } =
+  useQuery({
     queryKey: ["memberRecord", memberInfo?.email],
     queryFn: async () => {
-      if (!memberInfo?.email) return null;
-  
+      console.log("[Preferences] memberInfo in queryFn:", memberInfo);
+
+      if (!memberInfo?.email) {
+        console.warn("[Preferences] memberInfo.email is missing, skipping members query");
+        return null;
+      }
+
       const { data, error } = await supabase
         .from("members")
         .select("*")
         .eq("email", memberInfo.email)
-        .limit(1);               // <– make sure it's at most one row
-  
-      if (error) throw error;
-      return data?.[0] || null;  // <– unwrap array into a single object
+        .limit(1);
+
+      if (error) {
+        console.error("[Preferences] members query error:", error);
+        throw error;
+      }
+
+      console.log("[Preferences] members query data:", data);
+      return data?.[0] || null;
     },
     enabled: !!memberInfo?.email,
     staleTime: 30 * 1000
   });
+
 
   // 🔹 Engagement statistics (events attended, articles written, jobs posted)
   const { data: engagementStats, isLoading: statsLoading } = useQuery({
@@ -316,6 +328,8 @@ export default function PreferencesPage({
 
   // 🔹 Load profile data when memberRecord is available
   useEffect(() => {
+    console.log("[Preferences] memberRecord changed:", memberRecord);
+  
     if (memberRecord) {
       setFirstName(memberRecord.first_name || "EEK");
       setLastName(memberRecord.last_name || "");
@@ -323,9 +337,21 @@ export default function PreferencesPage({
       setBiography(memberRecord.biography || "");
       setProfilePhotoUrl(memberRecord.profile_photo_url || "");
       setLinkedinUrl(memberRecord.linkedin_url || "");
-      setShowInDirectory(memberRecord.show_in_directory !== false); // default true
+      setShowInDirectory(memberRecord.show_in_directory !== false);
     }
   }, [memberRecord]);
+  
+
+  useEffect(() => {
+    console.log("[Preferences] memberInfo prop:", memberInfo);
+  }, [memberInfo]);
+  
+  useEffect(() => {
+    console.log("[Preferences] currentUser from auth:", currentUser);
+  }, [currentUser]);
+  
+
+
 
   // 🔹 Load organization logo
   useEffect(() => {
