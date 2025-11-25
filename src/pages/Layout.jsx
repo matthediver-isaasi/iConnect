@@ -24,10 +24,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import PublicLayout from "./components/layouts/PublicLayout";
-import BarePublicLayout from "./components/layouts/BarePublicLayout";
-import FloaterDisplay from "./components/floaters/FloaterDisplay";
-import NewsTickerBar from "./components/news/NewsTickerBar";
+import PublicLayout from "@/components/layouts/PublicLayout";
+import BarePublicLayout from "@/components/layouts/BarePublicLayout";
+import FloaterDisplay from "@/components/floaters/FloaterDisplay";
+import NewsTickerBar from "@/components/news/NewsTickerBar";
+
 import { useQuery } from '@tanstack/react-query';
 
 
