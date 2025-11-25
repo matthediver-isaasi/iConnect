@@ -266,7 +266,7 @@ export default function PreferencesPage({
     queryKey: ["resourceCategories"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("resource_categories")
+        .from("resource_category")
         .select("*")
         .eq("is_active", true)
         .order("display_order", { ascending: true });
