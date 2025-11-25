@@ -33,7 +33,7 @@ import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 
 console.log("[Preferences] PROPS:", { memberInfo, organizationInfo, reloadMemberInfo, isFeatureExcluded });
-
+  
 
 
 // Helper: upload an image to Supabase storage and return a public URL
