@@ -473,7 +473,7 @@ const { data: memberRole } = useQuery({
     if (!memberInfo || !memberInfo.role_id) return null;
 
     const { data, error } = await supabase
-      .from('Role')            // or 'roles'
+      .from('role')            // or 'roles'
       .select('*')
       .eq('id', memberInfo.role_id)
       .maybeSingle();
@@ -495,7 +495,7 @@ const { data: dynamicNavItems = [] } = useQuery({
   refetchOnMount: false,
   queryFn: async () => {
     const { data, error } = await supabase
-      .from('PortalMenu')      // or 'portal_menu'
+      .from('portal_menu')      // or 'portal_menu'
       .select('*')
       .order('display_order', { ascending: true });
 
