@@ -162,7 +162,7 @@ export default function PreferencesPage({
     queryKey: ["awards"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("awards")
+        .from("award")
         .select("*")
         .eq("is_active", true)
         .order("level", { ascending: true });
@@ -179,7 +179,7 @@ export default function PreferencesPage({
       queryFn: async () => {
         if (!memberRecord?.id) return [];
         const { data, error } = await supabase
-          .from("offline_award_assignments")
+          .from("offline_award_assignment")
           .select("*")
           .eq("member_id", memberRecord.id);
         if (error) throw error;
@@ -194,7 +194,7 @@ export default function PreferencesPage({
     queryKey: ["awardSublevels"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("award_sublevels")
+        .from("award_sublevel")
         .select("*");
       if (error) throw error;
       return data || [];
@@ -209,7 +209,7 @@ export default function PreferencesPage({
       queryFn: async () => {
         if (!memberRecord?.id) return [];
         const { data, error } = await supabase
-          .from("member_group_assignments")
+          .from("member_group_assignment")
           .select("*")
           .eq("member_id", memberRecord.id);
         if (error) throw error;
@@ -224,7 +224,7 @@ export default function PreferencesPage({
     queryKey: ["memberGroups"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("member_groups")
+        .from("member_group")
         .select("*")
         .eq("is_active", true);
       if (error) throw error;
@@ -239,7 +239,7 @@ export default function PreferencesPage({
     queryKey: ["offlineAwards"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("offline_awards")
+        .from("offline_award")
         .select("*")
         .eq("is_active", true);
       if (error) throw error;
@@ -253,7 +253,7 @@ export default function PreferencesPage({
     queryKey: ["awardClassifications"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("award_classifications")
+        .from("award_classification")
         .select("*");
       if (error) throw error;
       return data || [];
