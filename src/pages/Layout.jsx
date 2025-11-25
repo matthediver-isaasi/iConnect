@@ -32,6 +32,7 @@ import NewsTickerBar from "@/components/news/NewsTickerBar";
 import { useQuery } from '@tanstack/react-query';
 
 
+
 const navigationItems = [
   {
     title: "Buy Tickets",
@@ -410,16 +411,32 @@ export default function Layout({ children, currentPageName }) {
 
 
   // Fetch global border radius setting
-  const { data: borderRadiusSetting } = useQuery({
-    queryKey: ['borderRadiusSetting'],
-    queryFn: async () => {
-      const allSettings = await base44.entities.SystemSettings.list();
-      const setting = allSettings.find(s => s.setting_key === 'global_border_radius');
-      return setting?.setting_value || '8px';
-    },
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false
-  });
+  const DEFAULT_BORDER_RADIUS = '8px';
+
+const { data: borderRadiusSetting = DEFAULT_BORDER_RADIUS } = useQuery({
+  queryKey: ['borderRadiusSetting'],
+  queryFn: async () => {
+    const { data, error } = await supabase
+      .from('SystemSettings')
+      .select('setting_value')
+      .eq('setting_key', 'global_border_radius')
+      .maybeSingle(); // or .single() depending on your setup
+
+    if (error) {
+      console.error('Error loading SystemSettings:', error);
+      return DEFAULT_BORDER_RADIUS;
+    }
+
+    if (data && data.setting_value) {
+      return String(data.setting_value);
+    }
+
+    return DEFAULT_BORDER_RADIUS;
+  },
+  staleTime: 5 * 60 * 1000,
+  refetchOnWindowFocus: false,
+});
+
 
   // Fetch member record for profile photo
   const { data: memberRecord } = useQuery({
