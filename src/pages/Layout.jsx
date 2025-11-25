@@ -438,41 +438,75 @@ const { data: borderRadiusSetting = DEFAULT_BORDER_RADIUS } = useQuery({
 });
 
 
-  // Fetch member record for profile photo
-  const { data: memberRecord } = useQuery({
-    queryKey: ['memberRecord', memberInfo?.email],
-    queryFn: async () => {
-      const allMembers = await base44.entities.Member.list();
-      return allMembers.find(m => m.email === memberInfo?.email);
-    },
-    enabled: !!memberInfo?.email,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
-  });
+  // 🔹 Fetch member record for profile photo
+const { data: memberRecord } = useQuery({
+  queryKey: ['memberRecord', memberInfo && memberInfo.email],
+  enabled: !!(memberInfo && memberInfo.email),
+  staleTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnMount: false,
+  queryFn: async () => {
+    const { data, error } = await supabase
+      .from('Member')          // or 'members'
+      .select('*')
+      .eq('email', memberInfo.email)
+      .maybeSingle();          // returns single row or null
 
-  // Fetch member role
-  const { data: memberRole } = useQuery({
-    queryKey: ['memberRole', memberInfo?.role_id],
-    queryFn: async () => {
-      if (!memberInfo?.role_id) return null;
-      const allRoles = await base44.entities.Role.list();
-      return allRoles.find(r => r.id === memberInfo.role_id);
-    },
-    enabled: !!memberInfo?.role_id,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
-  });
+    if (error) {
+      console.error('Error loading memberRecord:', error);
+      return null;
+    }
 
-  // Fetch dynamic navigation items from database
-  const { data: dynamicNavItems = [] } = useQuery({
-    queryKey: ['portal-menu'],
-    queryFn: () => base44.entities.PortalMenu.list('display_order'),
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
-  });
+    return data || null;
+  },
+});
+
+// 🔹 Fetch member role
+const { data: memberRole } = useQuery({
+  queryKey: ['memberRole', memberInfo && memberInfo.role_id],
+  enabled: !!(memberInfo && memberInfo.role_id),
+  staleTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnMount: false,
+  queryFn: async () => {
+    if (!memberInfo || !memberInfo.role_id) return null;
+
+    const { data, error } = await supabase
+      .from('Role')            // or 'roles'
+      .select('*')
+      .eq('id', memberInfo.role_id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error loading memberRole:', error);
+      return null;
+    }
+
+    return data || null;
+  },
+});
+
+// 🔹 Fetch dynamic navigation items from database
+const { data: dynamicNavItems = [] } = useQuery({
+  queryKey: ['portal-menu'],
+  staleTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnMount: false,
+  queryFn: async () => {
+    const { data, error } = await supabase
+      .from('PortalMenu')      // or 'portal_menu'
+      .select('*')
+      .order('display_order', { ascending: true });
+
+    if (error) {
+      console.error('Error loading PortalMenu:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+});
+
 
   const publicPages = ["Home", "AdminSetup", "VerifyMagicLink", "TestLogin", "UnpackedInternationalEmployability", "PublicEvents", "PublicAbout", "PublicContact", "PublicResources", "PublicArticles", "PublicNews", "JobBoard", "JobDetails", "JobPostSuccess", "sharon", "content"];
   
